@@ -334,123 +334,212 @@ COW 机制的核心思想是“推迟拷贝”，即 Fork 时不立即复制物�
 
 本次实验的核心目的是“打开黑盒”，观察用户程序执行 `ecall` 发起系统调用时，底层发生了什么。以往我们只关注 ucore 内核代码，但这一次，指导书引导我们通过“双重 GDB”方案（Guest GDB 调试 ucore，Host GDB 调试 QEMU 本身），试图捕捉模拟器如何用软件代码来模拟硬件指令的行为。
 
-## 2. 调试过程记录
-
-### 2.1 准备工作：加载用户态符号
-
-按照惯例启动 `make debug` 和 `make gdb` 后，我遇到的第一个问题是 GDB 无法识别用户态代码。ucore 的内核符号表里并没有用户程序的信息。 在询问大模型后，我得知 ucore 采用了一种“链接进内核”的方式加载用户程序。我需要在 GDB 中手动加载用户程序的符号表。 我执行了以下命令：
-
-```c#
-(gdb) add-symbol-file obj/__user_exit.out
-```
+## 2. 实验环境构建
 
 <p align="center">
   <img src="debug1.png" width="100%">
   <br>
 </p>
 
-加载成功后，终于可以在 `user/libs/syscall.c` 的 `syscall` 函数入口处打断点了。
+在实验开始前，我遭遇了 Host GDB 无法识别 QEMU 函数名的问题（报错 `Function not defined`）。在看了lab2的实验指导书后，发现安装的时候 QEMU 不带调试信息。 
+**解决方案**：
 
-### 2.2 追踪 `ecall`：从用户态跃迁到内核态
+1. 手动编译 `qemu-4.1.1` 源码，配置参数加入 `--enable-debug`。
+2. 修改 ucore 的 `Makefile`，将 QEMU 路径指向新编译的 `qemu-system-riscv64`。 这是后续所有源码级调试能够成功的基础。
 
-我让 ucore 继续运行，断点停在了 `syscall` 函数。为了精确捕捉特权级切换的瞬间，我使用 `si` 单步执行汇编指令。
+------
 
-随着 `sd` 指令不断压栈传递参数，我终于来到了那条关键指令：
+## 3. 调试流程记录
 
-```c#
-0x800104 <syscall+44>:  ecall
-```
+### 3.1 启动与连接
+
+我们开启了三个终端窗口，分别扮演不同的角色：
 
 <p align="center">
   <img src="debug2.png" width="100%">
   <br>
 </p>
 
-此时 PC 指针还在用户态地址 `0x800104`。 **关键时刻：** 当我再次执行 `si` 时，奇迹发生了。GDB 没有跳到下一条 `0x800108`，而是直接“瞬移”到了高地址：
+- **终端一（靶场）**： 执行 `make debug` 启动 QEMU。QEMU 暂停在启动入口，等待 GDB 连接。
+- **终端二（Host GDB）**： 通过 `pgrep` 找到 QEMU 进程 PID (31959)。 执行 `sudo gdb` 并 `attach 31959`。 设置 `handle SIGPIPE nostop noprint` 防止信号干扰。
+- **终端三（Guest GDB）**： 执行 `make gdb` 连接 QEMU 的 GDB Stub。 执行 `add-symbol-file obj/__user_exit.out` 加载用户程序符号表，否则无法在 `syscall` 打断点。
 
-```c#
-0xffffffffc0200e54 <__alltraps+4>: bnez sp, ...
-```
+### 3.2 第一阶段：观测 `ecall` 指令（特权级跃迁）
 
-这验证了 `ecall` 指令成功触发了异常，CPU（被 QEMU 模拟的）跳转到了 `stvec` 寄存器指向的内核中断入口 `__alltraps`。
+#### 步骤 1：建立同步
 
-### 2.3 尝试观测 QEMU 内部实现（遇到的“抓马”时刻）
-
-为了搞清楚刚才那一步 `si` 背后 QEMU 到底干了什么，我启动了第三个终端，使用 Host GDB 挂载到了正在运行的 QEMU 进程（PID 25151）。
-
-我试图在 QEMU 的中断处理核心函数 `riscv_cpu_do_interrupt` 处打断点：
-
-```c#
-(gdb) break riscv_cpu_do_interrupt
-```
+最初我在终端二直接 `break riscv_cpu_do_interrupt` 并 `c`，结果 QEMU 立刻被时钟中断卡住，导致终端三无法运行。我发现是断点打早了， **调整策略**：
 
 <p align="center">
   <img src="debug3.png" width="100%">
   <br>
 </p>
 
-**结果翻车了：** GDB 提示 `Function "riscv_cpu_do_interrupt" not defined`。 这意味着我当前环境安装的 QEMU 二进制文件是被 **Stripped（剥离符号）** 过的发布版。为了节省体积，发行版通常会去掉调试符号。虽然我能 attach 上去，但因为没有符号表，Host GDB 变成了“瞎子”，无法通过函数名定位断点。这导致我无法在本次实验中直接源码级调试 QEMU 的 C 代码。
+1. **终端二**：`disable 1`（禁用断点），`c`（放行）。
 
-虽然有些遗憾，但这本身也是一个重要的发现：在生产环境调试系统软件时，工具链的构建选项（是否带 Debug Info）至关重要。
+2. **终端三**：`break user/libs/syscall.c:syscall`，`c`（继续运行）。
 
-### 2.4 追踪 `sret`：回归用户态
+3. ucore 停在系统调用入口。我使用 `si` 单步执行，直到 `ecall` 指令的前一刻：
 
-既然 QEMU 内部看不了，我继续在 Guest GDB 中追踪内核的返回路径。我删除了旧断点，直接在 `__trapret` 处设断。
+   ```c#
+   => 0x800104 <syscall+44>:  ecall
+   ```
 
-```c#
-(gdb) break __trapret
-```
+4. **终端二**：`Ctrl+C` 暂停 QEMU，`enable 1`（重新启用断点），`c`（准备捕获）。
 
-ucore 执行完系统调用逻辑后停在了这里。我再次单步执行，看着 `LOAD` 指令一条条地从内核栈恢复寄存器（`ra`, `sp`, `s0`...），直到最后一条指令：
+#### 步骤 2：触发陷阱
 
-```c#
-0xffffffffc0200f16 <__trapret+86>: sret
-```
+- **终端三**：执行 `si`。
+- **终端二**：瞬间捕获断点，停在 `riscv_cpu_do_interrupt` 函数入口。
 
-此时 PC 还在内核态。按下 `si` 后，PC 瞬间变回了：
+#### 步骤 3：QEMU 源码行为分析
 
-```c#
-0x800108 <syscall+48>: sd a0,28(sp)
-```
+此时，我们处于 QEMU 源代码 `target/riscv/cpu_helper.c` 中。
 
 <p align="center">
   <img src="debug4.png" width="100%">
   <br>
 </p>
 
-地址 `0x800108` 正是 `ecall` 的下一条指令。这标志着特权级成功从 S Mode 切换回了 U Mode，系统调用闭环完成。
+1. **确认异常类型**：
+
+   ```c#
+   (gdb) p cs->exception_index
+   $1 = 8
+   ```
+
+   RISC-V 规范中，**8** 代表 `Environment call from U-mode`。证明我们捕获正确。
+
+2. **观测寄存器状态（处理前）**：
+
+   ```c#
+   (gdb) p ((RISCVCPU *)cs)->env.pc
+   $2 = 8388868   // 即 0x800104 (ecall 指令地址)
+   (gdb) p ((RISCVCPU *)cs)->env.sepc
+   $3 = 8388640   // 旧值 (尚未更新)
+   (gdb) p ((RISCVCPU *)cs)->env.scause
+   $4 = 3         // 旧值
+   ```
+
+3. **单步追踪状态机变更**： 我使用 `n` 命令单步执行 C 代码，观测到 QEMU 依次执行了以下逻辑：
+
+   - **准备切换准备**：代码读取 `mstatus`，将当前特权级（User Mode）记录到 `SPP` 位。
+
+   - **记录原因**：执行 `env->scause = ...` 后，`scause` 变为 **8**。
+
+   - **保存现场**：执行 `env->sepc = env->pc` 后，`sepc` 变为 **8388868** (0x800104)。
+
+   - **执行跳转**：执行 `env->pc = (env->stvec >> 2 << 2) + ...`。
+
+     ```c#
+     (gdb) p ((RISCVCPU *)cs)->env.pc
+     $38 = 18446744072637910608  // 即 0xFFFFFFFFC0200E50
+     ```
+<p align="center">
+  <img src="debug5.png" width="100%">
+  <br>
+</p>
+
+   - **切换模式**：调用 `riscv_cpu_set_mode(env, PRV_S)`，模拟器内部状态切换为 Supervisor。
+
+**分析结论**：在 Guest GDB 中看到的一条 `si` 指令导致 PC 从 0x800104 突变到内核地址，其底层实际上是执行了上述几十行 C 语言赋值语句。
+
+### 3.3 第二阶段：观测 `sret` 指令（回归用户态）
+
+#### 步骤 1：切换拦截目标
+
+为了捕捉返回指令，我在终端二调整了断点：
+
+```c#
+(gdb) disable 1           // 禁用中断捕获
+(gdb) break helper_sret   // 启用 sret 捕获
+(gdb) c
+```
+
+#### 步骤 2：内核执行
+
+- **终端三**：删除旧断点，设置 `break __trapret`，执行 `c`。
+
+- ucore 运行完系统调用逻辑，停在 `__trapret`。
+
+- 使用 `si` 单步直到最后一条指令：
+
+  ```c#
+  => 0xffffffffc0200f16 <__trapret+86>:  sret
+  ```
+
+#### 步骤 3：触发与捕获
+
+- **终端三**：执行 `si`。
+- **终端二**：成功捕获，停在 `target/riscv/op_helper.c` 的 `helper_sret` 函数。
+
+#### 步骤 4：QEMU 源码行为分析
+
+1. **读取返回地址**：
+
+   ```c#
+   target_ulong retpc = env->sepc;
+   ```
+
+   调试显示 `retpc` 为 **8388872** (0x800108)，这是 `ecall` 的下一条指令地址。
+
+2. **恢复特权级**： 代码读取 `mstatus` 的 `SPP` 位，调用 `riscv_cpu_set_mode(env, prev_priv)`。此操作将虚拟 CPU 从 S 模式降回 U 模式。
+
+3. **TCG 的控制流交接（关键发现）**： 这是本次实验最有趣的发现。`helper_sret` 函数最后并没有直接修改 `env->pc`，而是执行了：
+
+   ```c#
+   return retpc;
+   ```
+
+   继续执行 `n`，GDB 显示：
+
+   ```c#
+   0x00007f23e91ff122 in code_gen_buffer ()
+   ```
+
+<p align="center">
+  <img src="debug6.png" width="100%">
+  <br>
+</p>
+
+   **现象分析**：代码跳出了 C 语言环境，进入了无符号的汇编区域。 **验证结果**：此时回到终端三执行 `si`，PC 成功跳回 `0x800108`。
 
 ------
 
-## 3. QEMU 指令翻译与 TCG 功能分析
+## 4. TCG Translation 机制
 
-虽然没能断点进 QEMU 源码，但我查阅资料了解了其背后的 **TCG (Tiny Code Generator)** 机制。
+在调试 `sret` 结尾观察到的 `code_gen_buffer` 揭示了 QEMU 的核心机制——**TCG (Tiny Code Generator)**。
 
-**指令翻译 (Translation)：** 在执行 `ecall` 和 `sret` 时，QEMU 并不是简单地“解释”执行，而是通过 TCG 将 Guest（RISC-V）的指令翻译成 Host（x86_64）的指令序列。
+1. **指令翻译**：QEMU 不是逐条解释执行 RISC-V 指令，而是采用 **JIT (Just-In-Time)** 技术。它将 Guest 代码翻译成 Host (x86) 指令块 (Translation Block)，存放在 `code_gen_buffer` 中。
+2. **Helper Function 的角色**：
+   - 对于简单的加减乘除，TCG 直接生成 x86 指令。
+   - 对于 `ecall` 和 `sret` 这种涉及 CPU 全局状态（CSR 寄存器、特权级）修改的复杂指令，TCG 无法简单翻译，因此会生成“调用 C 语言辅助函数”的代码。
+3. **执行流闭环**：
+   - 当执行流到达 `sret` 时，TCG 代码调用 `helper_sret`。
+   - C 函数计算出目标地址，将其 **return** 给 TCG 引擎。
+   - TCG 引擎接收返回值，更新 PC，并跳转到目标地址对应的 Translation Block。这就是为什么我们最后会掉进 `code_gen_buffer` 的原因。
 
-- **对于 `ecall`：** TCG 会生成调用 QEMU 内部辅助函数（Helper Function）的代码（如 `helper_raise_exception`）。这个辅助函数会修改软件模拟的 CPU 状态结构体（`CPURISCVState`）：
-  - 设置 `sepc` = 当前 PC
-  - 设置 `scause` = 8 (User ecall)
-  - 设置 `sstatus` 进入 S Mode
-  - 设置 PC = `stvec`
-- **对于 `sret`：** 辅助函数会读取 `sepc` 恢复 PC，并根据 `sstatus` 恢复特权级。
-
-**与之前实验的联系：** 这让我联想到 Lab2 中的地址翻译调试。当时我们观察的是 MMU 的行为。其实，QEMU 的 **SoftMMU** 也是 TCG 的一部分。当 guest 访问内存时，TCG 插入的代码会查表（TLB），如果 miss 则调用 C 代码查询页表。这次实验调试的是控制流指令的模拟，上次调试的是访存指令的模拟，两者本质都是**软件模拟硬件行为**。
+**与 Lab 2 的关联**： 这与 Lab 2 调试内存翻译（SoftMMU）异曲同工。SoftMMU 也是通过 Helper 函数来处理 TLB Miss，用 C 代码模拟硬件的页表遍历逻辑。
 
 ------
 
-## 4. 大模型辅助与解决的问题
+## 5. 大模型辅助下的问题解决复盘
 
-在实验过程中，大模型在几个关键节点起到了“救火”作用：
+在本次实验中，我遇到了三个关键障碍，均在大模型（AI 助手）的辅助下解决：
 
-1. **加载符号的困惑：**
-   - **情景：** 当我尝试在 `user/libs/syscall.c` 打断点时，GDB 报错找不到源文件。我当时很纳闷，明明源码在目录下，为什么 GDB 看不到？
-   - **交互与解决：** 我询问 AI 既然是调试内核上的用户程序，是不是需要额外加载符号？AI 敏锐地指出 Lab5 的用户程序是作为二进制数据链接进内核的（Link-in-Kernel），GDB 默认只加载了 kernel 的符号。它给出了关键命令 `add-symbol-file obj/__user_exit.out`，直接解决了断点打不上的问题。
-2. **QEMU 断点失效的分析：**
-   - **情景：** 终端三中 Host GDB 提示 `Function not defined`，并且断点一直 pending。
-   - **交互与解决：** 我把报错贴给 AI，它分析指出这是因为系统自带的 QEMU 是 release 版本，strip 掉了符号表。它建议我不要纠结于重新编译 QEMU，而是专注于通过 Guest GDB 观察寄存器（PC, scause）的变化来验证行为。这让我避免了在环境配置上浪费过多时间，专注于实验逻辑本身。
+### 5.1 环境构建障碍
 
-## 5. 实验总结与“抓马”细节
+- **情景**：Host GDB 报错 `Function "riscv_cpu_do_interrupt" not defined`，断点 Pending。
+- **交互**：我将报错提交给 AI。AI 指出系统自带 QEMU 是 Stripped 版本，并给出了“下载源码 -> `./configure --enable-debug` -> 修改 Makefile”的完整重构方案。
+- **价值**：这是本次实验能够进行的根本前提。
 
-- **最有趣的细节：** 在执行 `si` 跨过 `ecall` 的那一瞬间，前一秒还在用户空间传参，后一秒就站在了内核的中断入口。这中间复杂的硬件压栈、特权级切换，在模拟器里只是一瞬间的函数调用，而在 GDB 里只是一次 `si`。
-- **最大的收获：** 理解了“双重 GDB”的边界。Guest GDB 调试的是**逻辑**（OS 认为自己在跑什么），Host GDB 调试的是**实现**（模拟器怎么欺骗 OS）。虽然这次 Host GDB 翻车了，但让我更深刻地理解了虚拟化的本质——就是用软件（TCG）维护一套数据结构来模拟硬件的状态机。
+### 5.2 并发调试的同步问题
+
+- **情景**：开启断点后 QEMU 被时钟中断频繁打断，无法调试到 `syscall`。
+- **交互**：我询问“如何只捕捉特定的 ecall”。AI 提供了“在终端二 Disable 断点 -> 终端三跑位 -> 终端二 Ctrl+C 暂停并 Enable -> 终端三触发”的战术。
+- **价值**：解决了多线程/多进程调试中的 Race Condition 问题。
+
+### 5.3 用户态符号加载
+
+- **情景**：在 `user/libs/syscall.c` 打断点失败。
+- **交互**：AI 解释了 Link-in-Kernel 机制导致 GDB 默认不加载用户程序符号，并提供了 `add-symbol-file obj/__user_exit.out` 命令。
