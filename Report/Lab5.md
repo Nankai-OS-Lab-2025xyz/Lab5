@@ -1480,7 +1480,7 @@ Linux 内核团队发布了多个修复补丁，主要修复思路：
 
 首先我们打开的是第一个gdb，这个主要作用是调试QUME代码，在这上面打一个断点，观察过程。我们设置一个断点，我们将断点设置在 `tlb_fill()`这个函数
 
-![img](https://nankai.feishu.cn/space/api/box/stream/download/asynccode/?code=NDUzOGJlN2JhYzE3MmNiYjk2ZWYxNDM2YzVjMzBmMDlfQlFsV0RiS3MxUGlDRUQzdmEzQklJTnlIOFVNV3RLN1VfVG9rZW46VWdyb2JYblFnb1VhTEl4amliV2NkNjRSbkFkXzE3NjU4NDUzODk6MTc2NTg0ODk4OV9WNA)
+![image-20251217001807852](C:\Users\xjt26\AppData\Roaming\Typora\typora-user-images\image-20251217001807852.png)
 
 可以看到我们成功将断点设置了，位置在`accel/tcg/cputlb.c 870`处，我们为什么把这个函数设置成断点呢？
 
@@ -1505,7 +1505,7 @@ AI回答：
 
 然后打开第二个gdb，ucore执行到特定的访存指令。当访存发生时，终端2的GDB会在我们设置的断点处中断，在终端2中，可以单步执行QEMU源码，观察TLB查询（**明示**）、页表遍历的具体过程。
 
-![img](https://nankai.feishu.cn/space/api/box/stream/download/asynccode/?code=NGEwYzI0Nzc2OThiNWQxN2Y5ZjU5MTNhOTM2ZTliOTlfdkdOeHZaRWMxUDJMV0pYR0t4aUdJS2d5WVhIdkFaNGJfVG9rZW46Q2xwSWJyUDM3b2RUQkp4SHdubGN1d1RTbnluXzE3NjU4NDU1Mjg6MTc2NTg0OTEyOF9WNA)
+![image-20251217001828603](C:\Users\xjt26\AppData\Roaming\Typora\typora-user-images\image-20251217001828603.png)
 
 **这条指令是什么？**
 
@@ -1535,11 +1535,11 @@ AI回答：
 
 现在我们来分析一下这个过程，也就是调试出来的结果:
 
-![img](https://nankai.feishu.cn/space/api/box/stream/download/asynccode/?code=MmE2NzQ1YzM5YTA4NmJjNDNiYjRhNDZjNmRkYWRiOTJfNmdDTk1vdTdWWUhBdTU5cW51Z011RlBZVXU1OUk4cUhfVG9rZW46SkVzaWIzS2dnb0t1bmZ4VHFXMWNpbm5SbmtZXzE3NjU4NDU1OTY6MTc2NTg0OTE5Nl9WNA)
+![image-20251217001851139](C:\Users\xjt26\AppData\Roaming\Typora\typora-user-images\image-20251217001851139.png)
 
 在 host 侧对 QEMU 的 `tlb_fill` 设置断点后，当 guest 侧单步执行触发一次取指访存，QEMU 在 `accel/tcg/cputlb.c:870` 的 `tlb_fill` 命中断点。`access_type` 包含 `MMU_INST_FETCH` 表明该次翻译由取指触发，`addr` 参数给出了待翻译的虚拟地址 VA，从而证明：QEMU 在 soft-TLB 未命中后进入 tlb_fill 执行地址翻译并准备回填 TLB。
 
-![img](https://nankai.feishu.cn/space/api/box/stream/download/asynccode/?code=NTZkY2YyYjEzNzljMmY2YmI3YWNmYTQ0N2Q3ZmNjZGZfTkd2QmxuNHl4ODNwR2xWMlpqQUxnYVpkVVBoNGN6YVBfVG9rZW46VEpTVWJLOVd3bzZOd1F4ZkFZamNTMmxVbnJnXzE3NjU4NDU1OTY6MTc2NTg0OTE5Nl9WNA)
+![image-20251217001910805](C:\Users\xjt26\AppData\Roaming\Typora\typora-user-images\image-20251217001910805.png)
 
 当 guest CPU 执行到 PC=0x1000 的指令时，QEMU 的 TCG 执行线程开始取指。 在查找翻译块（TB）的过程中，QEMU 需要为取指地址 0x1000 获取对应的物理地址，于是进入 `get_page_addr_code`。 在该过程中，QEMU 先查询软件 TLB，发现未命中，随后调用 `tlb_fill`，开始模拟硬件 MMU 的页表遍历过程，并准备将翻译结果回填到 TLB 中。
 
@@ -1547,7 +1547,7 @@ AI回答：
 
 （此过程通过大模型的提示一步步完成）
 
-![img](https://nankai.feishu.cn/space/api/box/stream/download/asynccode/?code=NGIzYmM5NDIxNDI4Mzc4NGYxZTQ2MzViOTI3YWUwOTFfN3JraE45bWV6bHRXM2dLdjgzNGFQQWFtbXJUY2hwTjZfVG9rZW46SHE2QmJnYzZJbzhrQVp4Q0FQVGNmeGN2bkpmXzE3NjU4NDU3MzU6MTc2NTg0OTMzNV9WNA)
+![image-20251217001928340](C:\Users\xjt26\AppData\Roaming\Typora\typora-user-images\image-20251217001928340.png)
 
 1）关键调用路径：从“访存/取指”到 `tlb_fill`
 
@@ -1560,7 +1560,7 @@ AI回答：
 > 5. **`tlb_table_lookup(...)`** 在 QEMU 的 **software TLB（soft-TLB）** 里查是否已有该页的翻译缓存。
 > 6. **`tlb_fill(...)`**（下断点的位置，`accel/tcg/cputlb.c:870`） **TLB miss 后的慢路径入口**：开始做地址翻译（页表 walk），并在成功后回填 soft-TLB。
 
-![img](https://nankai.feishu.cn/space/api/box/stream/download/asynccode/?code=ZjBiNTA3ZTkwNTdkOWIyOTVjZWYyOWE3ZGNlNDA1MDNfRDY5c0NrYXhTeDZ1Y214ZmlXNExyZ0dNazhabUNUUUVfVG9rZW46RnNTR2IxTmdDb242TG54M0ZzTmN2REhZbjZmXzE3NjU4NDU3MzU6MTc2NTg0OTMzNV9WNA)
+![image-20251217001954178](C:\Users\xjt26\AppData\Roaming\Typora\typora-user-images\image-20251217001954178.png)
 
 用调试“演示”一次访存 VA→PA 的翻译：把 **GDB2 看到的 VA** 和 **GDB1 里翻译的对象**对应起来，再在 GDB1 单步看到它如何算出 PA。
 
@@ -1569,20 +1569,25 @@ AI回答：
 现在用的是取指，最简单：
 
 ```bash
-(gdb) p/x $pc      # 例如 0x1000 ``(gdb) x/i $pc ``(gdb) si           # 执行一步，触发取指
+(gdb) p/x $pc      # 例如 0x1000 
+(gdb) x/i $pc 
+(gdb) si           # 执行一步，触发取指
 ```
 
-![img](https://nankai.feishu.cn/space/api/box/stream/download/asynccode/?code=ODlhYTA5NzFiY2U5ZWUyYWFiNDVjOTU5MDhjYmYyYWJfUGRQU1FOSUw1S2dwV2RoNk8wWHBrWVRnT0l5RDBzM3ZfVG9rZW46TFlhZmJhQ3o1bzdXaXB4VTVTTmM1R3Mxbm9jXzE3NjU4NDU3MzU6MTc2NTg0OTMzNV9WNA)
+![image-20251217002012030](C:\Users\xjt26\AppData\Roaming\Typora\typora-user-images\image-20251217002012030.png)
 
 **Step 2：在 GDB1（host gdb attach QEMU）命中 `tlb_fill` 后，对齐“到底在翻译哪个 VA”**
 
 这里有个小坑：在 `tlb_fill` 这一帧里直接 `p/x addr` 得到的值像是 QEMU 内部指针（你打印出过 `0x56080b30fb60`），这更像是调试符号/参数显示不完全准确导致的“看起来像 addr”。**最稳的方法**是切到栈上上一帧 `get_page_addr_code`，因为它明确显示了 `addr=4096`：
 
-```
-(gdb) bt ``(gdb) frame 1              # 切到 get_page_addr_code 那一帧 ``(gdb) info args            # 这里应该能看到 addr=4096 ``(gdb) p/x addr             # 应输出 0x1000（guest VA）
+```bash
+(gdb) bt 
+(gdb) frame 1              # 切到 get_page_addr_code 那一帧 
+(gdb) info args            # 这里应该能看到 addr=4096 
+(gdb) p/x addr             # 应输出 0x1000（guest VA）
 ```
 
-![img](https://nankai.feishu.cn/space/api/box/stream/download/asynccode/?code=OWYwMDZkNjRiZDUyMmQ3MzcyODBkMjZhMWI5NzkxYTVfb1M0eUhTdE9GYkRBYnJXSGFIa3M1TFo0NTNRWFc5eEFfVG9rZW46VW43cmJnOW1wb2JwRVB4TFdTTmMxR2REbjBjXzE3NjU4NDU3MzU6MTc2NTg0OTMzNV9WNA)
+![image-20251217002033628](C:\Users\xjt26\AppData\Roaming\Typora\typora-user-images\image-20251217002033628.png)
 
 GDB2：`$pc=0x1000`
 
@@ -1594,13 +1599,15 @@ GDB1：`get_page_addr_code(..., addr=4096)` → `VA=0x1000`
 
 接下来从 `tlb_fill`/翻译调用处单步：
 
-```
-(gdb) frame 0 ``(gdb) n ``(gdb) s   # 遇到进入 RISC-V 翻译函数（get_physical_address/riscv_cpu_tlb_fill 等）就 step in
+```bash
+(gdb) frame 0 
+(gdb) n 
+(gdb) s   # 遇到进入 RISC-V 翻译函数（get_physical_address/riscv_cpu_tlb_fill 等）就 step in
 ```
 
 在 QEMU 的 `tlb_fill` 断点处命中，随后单步执行经过 `cc->tlb_fill`（架构相关翻译入口），并返回到 `get_page_addr_code(env, addr=4096)`。此时程序开始为取指虚拟地址 `0x1000` 在 soft-TLB 中查找映射，执行 `tlb_index(...)` 计算查找索引，准备进行 TLB entry 的命中判断。
 
-![img](https://nankai.feishu.cn/space/api/box/stream/download/asynccode/?code=Yjg5NjllMDAzZGI1NDMzNTcyMWQ3NGZkZGM1NGIyNDBfOUJNbGljdDAxWXlhelJTYVZvUjhoSnlXYWlRTVBQanZfVG9rZW46VFVkeWJqUlYyb3ZkNGR4Q0ZReGNUTFhubjl0XzE3NjU4NDU3MzU6MTc2NTg0OTMzNV9WNA)
+![image-20251217002155041](C:\Users\xjt26\AppData\Roaming\Typora\typora-user-images\image-20251217002155041.png)
 
 在 guest 侧（GDB2），通过单步执行指令观察到当前 PC 为 `0x1000`，该取指操作触发了一次虚拟地址访问。随后在 host 侧（GDB1）对 QEMU 的 `tlb_fill` 函数设置断点，成功捕获到该取指访存的地址翻译过程。
 
@@ -1610,7 +1617,7 @@ GDB1：`get_page_addr_code(..., addr=4096)` → `VA=0x1000`
 
 ### 2.单步调试页表翻译的部分，解释一下关键的操作流程。（这段是地址翻译的流程吗，我还是没有理解，给我解释的详细一点 / 这三个循环是在做什么，这两行的操作是从当前页表取出页表项吗，我还是没有理解）
 
-![img](https://nankai.feishu.cn/space/api/box/stream/download/asynccode/?code=Njk5MzM4NzZlYjk0N2JmYzI2YzhhYmFhYjA0MGU4NmJfeDk1SHhneVRVTjVTaWQzNHFOTnJ3b0pCSER1dWNMdU9fVG9rZW46Q3drdmJzTU82bzd4T1V4a21RMWNrckJ1bnZUXzE3NjU4NDU3MzU6MTc2NTg0OTMzNV9WNA)
+![image-20251217002215217](C:\Users\xjt26\AppData\Roaming\Typora\typora-user-images\image-20251217002215217.png)
 
 **把虚拟地址 VA 拆解 → 按 SV39 的 3 级页表逐级查 PTE → 得到物理页号 PPN → 组合成物理地址 PA**
 
