@@ -1,0 +1,67 @@
+# GDB配置文件 - 用户程序调试
+# 用于调试用户态程序（通过内核GDB附加到用户进程）
+
+# 注意：这个配置文件需要在用户程序已经加载后使用
+# 通常需要在内核GDB中先找到用户程序的地址空间
+
+# 设置架构
+set arch riscv:rv64
+
+# 显示提示信息
+echo \n
+echo ========================================\n
+echo User Program GDB Debugger\n
+echo ========================================\n
+echo \n
+echo This GDB instance is for debugging user programs.\n
+echo You need to:\n
+echo   1. Find the user program's load address from kernel GDB\n
+echo   2. Use 'add-symbol-file' to load user program symbols\n
+echo   3. Set breakpoints in user code\n
+echo \n
+echo Example:\n
+echo   add-symbol-file obj/user/waitkill.o 0x100000\n
+echo   break main\n
+echo   break syscall\n
+echo \n
+echo ========================================\n
+echo \n
+
+# 设置显示选项
+set print pretty on
+set print array on
+set print array-indexes on
+
+# 辅助函数：加载用户程序符号
+# 用法: load_user_symbols <obj_file> <base_addr>
+define load_user_symbols
+    if $argc != 2
+        printf "Usage: load_user_symbols <obj_file> <base_addr>\n"
+        printf "Example: load_user_symbols obj/user/waitkill.o 0x100000\n"
+    else
+        add-symbol-file $arg0 $arg1
+        printf "Loaded symbols from %s at address 0x%lx\n", $arg0, $arg1
+    end
+end
+
+# 显示用户程序系统调用包装函数
+define show_user_syscall
+    printf "User Syscall Wrapper Functions:\n"
+    printf "  sys_exit()    - Exit process\n"
+    printf "  sys_fork()    - Fork process\n"
+    printf "  sys_wait()    - Wait for child\n"
+    printf "  sys_yield()    - Yield CPU\n"
+    printf "  sys_kill()     - Kill process\n"
+    printf "  sys_getpid()  - Get process ID\n"
+    printf "  sys_putc()     - Print character\n"
+end
+
+
+
+
+
+
+
+
+
+

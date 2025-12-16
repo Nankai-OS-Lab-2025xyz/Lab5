@@ -1,0 +1,163 @@
+# GDB配置文件 - 系统调用跟踪专用
+# 这个配置文件专门用于跟踪和观察系统调用流程
+
+set arch riscv:rv64
+target remote :1234
+file bin/kernel
+
+# 设置系统调用跟踪模式
+define trace_syscall
+    printf "\n"
+    printf "╔═══════════════════════════════════════════════════════╗\n"
+    printf "║           SYSTEM CALL TRACE                           ║\n"
+    printf "╚═══════════════════════════════════════════════════════╝\n"
+    
+    if current != 0 && current->tf != 0
+        set $tf = current->tf
+        set $num = $tf->gpr.a0
+        
+        printf "Process: PID=%d, Name=%s\n", current->pid, current->name
+        printf "─────────────────────────────────────────────────────\n"
+        printf "Syscall Number: %ld (", $num
+        call syscall_name($num)
+        printf ")\n"
+        printf "─────────────────────────────────────────────────────\n"
+        printf "Arguments:\n"
+        printf "  a1 (arg0): 0x%016lx (%ld)\n", $tf->gpr.a1, $tf->gpr.a1
+        printf "  a2 (arg1): 0x%016lx (%ld)\n", $tf->gpr.a2, $tf->gpr.a2
+        printf "  a3 (arg2): 0x%016lx (%ld)\n", $tf->gpr.a3, $tf->gpr.a3
+        printf "  a4 (arg3): 0x%016lx (%ld)\n", $tf->gpr.a4, $tf->gpr.a4
+        printf "  a5 (arg4): 0x%016lx (%ld)\n", $tf->gpr.a5, $tf->gpr.a5
+        printf "─────────────────────────────────────────────────────\n"
+        printf "Context:\n"
+        printf "  epc:      0x%016lx\n", $tf->epc
+        printf "  status:   0x%016lx\n", $tf->status
+        printf "  cause:    0x%016lx\n", $tf->cause
+        printf "  tval:     0x%016lx\n", $tf->tval
+        printf "  sp:       0x%016lx\n", $tf->gpr.sp
+        printf "  ra:       0x%016lx\n", $tf->gpr.ra
+        printf "╚═══════════════════════════════════════════════════════╝\n"
+        printf "\n"
+    end
+end
+
+# 打印系统调用名称
+define syscall_name
+    set $num = $arg0
+    if $num == 1
+        printf "SYS_exit"
+    else if $num == 2
+        printf "SYS_fork"
+    else if $num == 3
+        printf "SYS_wait"
+    else if $num == 4
+        printf "SYS_exec"
+    else if $num == 10
+        printf "SYS_yield"
+    else if $num == 12
+        printf "SYS_kill"
+    else if $num == 18
+        printf "SYS_getpid"
+    else if $num == 30
+        printf "SYS_putc"
+    else if $num == 31
+        printf "SYS_pgdir"
+    else
+        printf "Unknown(%d)", $num
+    end
+end
+
+# 在系统调用处理函数处设置断点并自动跟踪
+break syscall
+commands
+    printf "\n"
+    printf "╔═══════════════════════════════════════════════════════╗\n"
+    printf "║           SYSTEM CALL TRACE                           ║\n"
+    printf "╚═══════════════════════════════════════════════════════╝\n"
+    if current != 0 && current->tf != 0
+        set $tf = current->tf
+        set $num = $tf->gpr.a0
+        printf "Process: PID=%d, Name=%s\n", current->pid, current->name
+        printf "─────────────────────────────────────────────────────\n"
+        printf "Syscall Number: %ld (", $num
+        if $num == 1
+            printf "SYS_exit"
+        else if $num == 2
+            printf "SYS_fork"
+        else if $num == 3
+            printf "SYS_wait"
+        else if $num == 4
+            printf "SYS_exec"
+        else if $num == 10
+            printf "SYS_yield"
+        else if $num == 12
+            printf "SYS_kill"
+        else if $num == 18
+            printf "SYS_getpid"
+        else if $num == 30
+            printf "SYS_putc"
+        else if $num == 31
+            printf "SYS_pgdir"
+        else
+            printf "Unknown(%d)", $num
+        end
+        printf ")\n"
+        printf "─────────────────────────────────────────────────────\n"
+        printf "Arguments:\n"
+        printf "  a1 (arg0): 0x%016lx (%ld)\n", $tf->gpr.a1, $tf->gpr.a1
+        printf "  a2 (arg1): 0x%016lx (%ld)\n", $tf->gpr.a2, $tf->gpr.a2
+        printf "  a3 (arg2): 0x%016lx (%ld)\n", $tf->gpr.a3, $tf->gpr.a3
+        printf "  a4 (arg3): 0x%016lx (%ld)\n", $tf->gpr.a4, $tf->gpr.a4
+        printf "  a5 (arg4): 0x%016lx (%ld)\n", $tf->gpr.a5, $tf->gpr.a5
+        printf "─────────────────────────────────────────────────────\n"
+        printf "Context:\n"
+        printf "  epc:      0x%016lx\n", $tf->epc
+        printf "  status:   0x%016lx\n", $tf->status
+        printf "  cause:    0x%016lx\n", $tf->cause
+        printf "  tval:     0x%016lx\n", $tf->tval
+        printf "  sp:       0x%016lx\n", $tf->gpr.sp
+        printf "  ra:       0x%016lx\n", $tf->gpr.ra
+        printf "╚═══════════════════════════════════════════════════════╝\n"
+        printf "\n"
+    end
+    continue
+end
+
+# 在陷阱入口处设置断点（可选，会产生大量输出）
+# break __alltraps
+# commands
+#     printf ">>> Trap Entry: cause=0x%lx <<<\n", current->tf->cause
+#     continue
+# end
+
+# 在陷阱返回处设置断点（观察返回值）
+break __trapret
+commands
+    if current != 0 && current->tf != 0
+        printf "\n>>> Returning from syscall, retval=0x%lx (%ld) <<<\n", \
+               current->tf->gpr.a0, current->tf->gpr.a0
+    end
+    continue
+end
+
+# 设置显示选项
+set print pretty on
+set print array on
+set print array-indexes on
+set print elements 0
+
+# 启动信息
+echo \n
+echo ╔═══════════════════════════════════════════════════════╗\n
+echo ║   System Call Tracer - Auto-trace mode enabled      ║\n
+echo ╚═══════════════════════════════════════════════════════╝\n
+echo \n
+echo This GDB session will automatically trace all system calls.\n
+echo \n
+echo Breakpoints:\n
+echo   - syscall()     : Trace entry with full details\n
+echo   - __trapret     : Trace return value\n
+echo \n
+echo Type 'continue' or 'c' to start tracing...\n
+echo \n
+

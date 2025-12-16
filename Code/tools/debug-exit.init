@@ -1,0 +1,105 @@
+# GDB调试脚本 - 专门用于调试exit程序的waitpid问题
+
+set arch riscv:rv64
+target remote :1234
+file bin/kernel
+
+# 设置关键断点（只设置一次）
+break do_wait
+break do_exit
+break sys_wait
+
+# 定义辅助函数：检查waitpid参数
+define check_waitpid
+    printf "\n========== waitpid 参数检查 ==========\n"
+    printf "pid: %d\n", $arg0
+    printf "code_store: %p\n", $arg1
+    if $arg1 != 0
+        printf "code_store 值: 0x%x\n", *$arg1
+        printf "user_mem_check 结果: %d\n", user_mem_check(current->mm, (uintptr_t)$arg1, sizeof(int), 1)
+    end
+    printf "当前进程: PID=%d, Name=%s\n", current->pid, current->name
+    printf "=======================================\n\n"
+end
+
+# 定义辅助函数：检查子进程状态
+define check_child
+    printf "\n========== 子进程状态检查 ==========\n"
+    if $arg0 != 0
+        printf "子进程 PID: %d\n", $arg0->pid
+        printf "子进程状态: %d (3=ZOMBIE)\n", $arg0->state
+        printf "子进程退出码: %d (0x%x)\n", $arg0->exit_code, $arg0->exit_code
+        printf "父进程 PID: %d\n", $arg0->parent->pid
+    else
+        printf "子进程指针为NULL\n"
+    end
+    printf "=======================================\n\n"
+end
+
+# 在do_wait处自动检查（删除重复的断点，使用commands）
+# 注意：do_wait断点已经在上面设置了，这里只设置commands
+# 需要先删除重复的断点
+delete 4
+delete 5
+
+# 为do_wait设置commands
+commands 1
+    printf "\n>>> 进入 do_wait <<<\n"
+    printf "========== waitpid 参数检查 ==========\n"
+    printf "pid: %d\n", pid
+    printf "code_store: %p\n", code_store
+    if code_store != 0
+        printf "code_store 值: 0x%x\n", *code_store
+        if current->mm != 0
+            printf "user_mem_check 结果: %d\n", user_mem_check(current->mm, (uintptr_t)code_store, sizeof(int), 1)
+        end
+    end
+    printf "当前进程: PID=%d, Name=%s\n", current->pid, current->name
+    printf "=======================================\n\n"
+    continue
+end
+
+# 为do_exit设置commands
+commands 2
+    printf "\n>>> 进入 do_exit <<<\n"
+    printf "退出进程 PID: %d\n", current->pid
+    printf "退出码: %d (0x%x)\n", error_code, error_code
+    printf "设置后的 exit_code: %d\n", current->exit_code
+    continue
+end
+
+# 在页面错误处检查
+break exception_handler
+commands
+    if tf->cause == 0xc || tf->cause == 0xd || tf->cause == 0xf
+        printf "\n>>> 页面错误 <<<\n"
+        printf "错误地址 (tval): 0x%lx\n", tf->tval
+        printf "错误原因 (cause): 0x%lx\n", tf->cause
+        printf "程序计数器 (epc): 0x%lx\n", tf->epc
+        printf "当前进程: PID=%d\n", current->pid
+        if current->mm != 0
+            printf "检查地址是否在VMA中...\n"
+            set $vma = find_vma(current->mm, tf->tval)
+            if $vma != 0
+                printf "找到VMA: start=0x%lx, end=0x%lx\n", $vma->vm_start, $vma->vm_end
+            else
+                printf "地址不在任何VMA中！\n"
+            end
+        end
+    end
+    continue
+end
+
+echo \n
+echo ========================================\n
+echo Exit程序调试脚本已加载\n
+echo 断点已设置：\n
+echo   - do_wait\n
+echo   - do_exit\n
+echo   - sys_wait\n
+echo   - exception_handler (页面错误)\n
+echo \n
+echo 输入 'continue' 开始调试\n
+echo ========================================\n
+echo \n
+

@@ -1,0 +1,150 @@
+# GDB配置文件 - 内核调试
+# 用于连接到QEMU的GDB服务器，调试内核代码
+
+# 设置架构
+set arch riscv:rv64
+
+# 连接到QEMU的GDB服务器
+target remote :1234
+
+# 加载内核符号文件
+file bin/kernel
+
+# 设置一些有用的断点，用于观察系统调用流程
+# 1. 陷阱入口点（所有异常/中断都会经过这里）
+break __alltraps
+
+# 2. 异常处理函数
+break exception_handler
+
+# 3. 系统调用处理函数
+break syscall
+
+# 4. 用户态ecall处理（CAUSE_USER_ECALL）
+# 注意：条件断点需要在运行时设置，这里先注释掉
+# break trap.c:208 if current->tf->cause == 8
+
+# 5. 陷阱返回点
+break __trapret
+
+# 显示当前进程信息
+define show_current_proc
+    if current != 0
+        printf "Current Process:\n"
+        printf "  PID: %d\n", current->pid
+        printf "  Name: %s\n", current->name
+        printf "  State: %d\n", current->state
+    else
+        printf "No current process\n"
+    end
+end
+
+# 显示陷阱帧信息
+define show_trapframe
+    printf "Trap Frame:\n"
+    printf "  epc: 0x%lx\n", $arg0->epc
+    printf "  status: 0x%lx\n", $arg0->status
+    printf "  cause: 0x%lx\n", $arg0->cause
+    printf "  tval: 0x%lx\n", $arg0->tval
+    printf "  Registers:\n"
+    printf "    a0 (syscall num): 0x%lx\n", $arg0->gpr.a0
+    printf "    a1: 0x%lx\n", $arg0->gpr.a1
+    printf "    a2: 0x%lx\n", $arg0->gpr.a2
+    printf "    a3: 0x%lx\n", $arg0->gpr.a3
+    printf "    a4: 0x%lx\n", $arg0->gpr.a4
+    printf "    a5: 0x%lx\n", $arg0->gpr.a5
+    printf "    sp: 0x%lx\n", $arg0->gpr.sp
+    printf "    ra: 0x%lx\n", $arg0->gpr.ra
+end
+
+# 在系统调用处理函数处自动显示信息
+define syscall_info
+    printf "\n========== System Call Info ==========\n"
+    call show_current_proc()
+    if current != 0 && current->tf != 0
+        call show_trapframe(current->tf)
+    end
+    printf "=======================================\n\n"
+end
+
+# 在exception_handler处自动显示陷阱信息
+define trap_info
+    printf "\n========== Trap Info ==========\n"
+    printf "Trap Cause: 0x%lx\n", tf->cause
+    if tf->cause == 8
+        printf ">>> User ECALL (System Call) <<<\n"
+        printf "Syscall Number: %ld\n", tf->gpr.a0
+        printf "Arguments:\n"
+        printf "  a1: 0x%lx\n", tf->gpr.a1
+        printf "  a2: 0x%lx\n", tf->gpr.a2
+        printf "  a3: 0x%lx\n", tf->gpr.a3
+        printf "  a4: 0x%lx\n", tf->gpr.a4
+        printf "  a5: 0x%lx\n", tf->gpr.a5
+    end
+    call show_current_proc()
+    printf "================================\n\n"
+end
+
+# 设置钩子函数，在断点处自动执行
+# 注意：hook-stop 会在每次停止时执行，可能会产生大量输出
+# 如果需要，可以取消下面的注释
+# define hook-stop
+#     printf "\n>>> Stopped at: "
+#     x/i $pc
+# end
+
+# 打印系统调用名称的辅助函数
+define syscall_name
+    set $num = $arg0
+    if $num == 1
+        printf "SYS_exit"
+    else if $num == 2
+        printf "SYS_fork"
+    else if $num == 3
+        printf "SYS_wait"
+    else if $num == 4
+        printf "SYS_exec"
+    else if $num == 10
+        printf "SYS_yield"
+    else if $num == 12
+        printf "SYS_kill"
+    else if $num == 18
+        printf "SYS_getpid"
+    else if $num == 30
+        printf "SYS_putc"
+    else if $num == 31
+        printf "SYS_pgdir"
+    else
+        printf "Unknown syscall (%d)", $num
+    end
+end
+
+# 设置显示选项
+set print pretty on
+set print array on
+set print array-indexes on
+set print elements 0
+
+# 显示反汇编
+set disassembly-flavor intel
+
+# 启动时显示提示信息
+echo \n
+echo ========================================\n
+echo Kernel GDB Debugger Ready\n
+echo ========================================\n
+echo Breakpoints set at:\n
+echo   - __alltraps (trap entry)\n
+echo   - exception_handler (exception handler)\n
+echo   - syscall (syscall handler)\n
+echo   - __trapret (trap return)\n
+echo \n
+echo Useful commands:\n
+echo   show_current_proc()  - Show current process info\n
+echo   show_trapframe(tf)   - Show trapframe details\n
+echo   syscall_name(num)    - Print syscall name\n
+echo \n
+echo Type 'continue' or 'c' to start execution\n
+echo ========================================\n
+echo \n
+

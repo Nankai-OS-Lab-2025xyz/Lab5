@@ -1,0 +1,118 @@
+# GDB配置文件 - QEMU TCG翻译调试
+# 用于调试QEMU源码中的TCG翻译过程
+
+# 设置架构
+set arch riscv:rv64
+
+# 注意：QEMU本身不提供GDB服务器
+# 需要通过进程附加的方式调试QEMU
+# 或者使用QEMU的monitor命令
+
+echo \n
+echo ========================================\n
+echo QEMU TCG Translation Debugger\n
+echo ========================================\n
+echo \n
+echo 使用方法：\n
+echo 1. 启动QEMU后，找到QEMU进程PID：\n
+echo    ps aux | grep qemu-system-riscv64\n
+echo \n
+echo 2. 附加到QEMU进程：\n
+echo    (gdb) attach <PID>\n
+echo \n
+echo 3. 或者使用QEMU monitor：\n
+echo    在QEMU启动时添加 -monitor stdio\n
+echo \n
+echo 4. 加载QEMU符号（如果已编译调试版）：\n
+echo    (gdb) file ~/qemu/build-debug/riscv64-softmmu/qemu-system-riscv64\n
+echo \n
+echo 5. 设置断点：\n
+echo    (gdb) break translate.c:gen_ecall\n
+echo    (gdb) break translate.c:gen_sret\n
+echo    (gdb) break cpu_helper.c:riscv_cpu_do_interrupt\n
+echo \n
+echo ========================================\n
+echo \n
+
+# 定义辅助函数：查找QEMU进程
+define find_qemu
+    shell ps aux | grep qemu-system-riscv64 | grep -v grep
+end
+
+# 定义辅助函数：附加到QEMU
+define attach_qemu
+    set $pid = $arg0
+    if $pid == 0
+        printf "请先使用 find_qemu 查找QEMU进程ID\n"
+        printf "然后使用: attach_qemu <PID>\n"
+    else
+        attach $pid
+        printf "已附加到QEMU进程 %d\n", $pid
+    end
+end
+
+# 定义辅助函数：加载QEMU符号
+define load_qemu_symbols
+    if $arg0 == 0
+        set $qemu_path = "~/qemu/build-debug/riscv64-softmmu/qemu-system-riscv64"
+    else
+        set $qemu_path = $arg0
+    end
+    file $qemu_path
+    printf "已加载QEMU符号: %s\n", $qemu_path
+end
+
+# 定义辅助函数：设置TCG翻译断点
+define set_tcg_breakpoints
+    printf "设置TCG翻译相关断点...\n"
+    
+    # RISC-V指令翻译断点
+    break gen_helper_ecall
+    break gen_helper_sret
+    
+    # 或者使用文件名和行号（需要根据实际源码调整）
+    # break translate.c:gen_ecall
+    # break translate.c:gen_sret
+    
+    # 异常处理断点
+    break riscv_cpu_do_interrupt
+    
+    printf "断点设置完成\n"
+end
+
+# 显示当前函数信息
+define show_tcg_context
+    printf "\n========== TCG Translation Context ==========\n"
+    printf "当前函数: "
+    x/i $pc
+    printf "调用栈:\n"
+    backtrace
+    printf "=============================================\n\n"
+end
+
+# 设置显示选项
+set print pretty on
+set print array on
+set print elements 0
+
+# 提示用户下一步操作
+echo \n
+echo 请执行以下步骤：\n
+echo 1. find_qemu          - 查找QEMU进程ID\n
+echo 2. attach_qemu <PID>  - 附加到QEMU进程\n
+echo 3. load_qemu_symbols [path] - 加载QEMU符号\n
+echo 4. set_tcg_breakpoints - 设置TCG翻译断点\n
+echo 5. continue           - 继续执行\n
+echo \n
+
+
+
+
+
+
+
+
+
+
+
+
